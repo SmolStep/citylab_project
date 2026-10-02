@@ -26,9 +26,9 @@ private:
       subscriber_laser_;
 
   // private variables
-  const double distance_thres = 0.1;
-  bool obstacles_ahead;
-  double turn_dir_;
+  const double distance_thres = 0.35;
+  bool obstacle_found;
+  double turn_dir;
 
   // subscriptions callback functions
   void laserscan_callback(const sensor_msgs::msg::LaserScan::SharedPtr msg) {
@@ -46,9 +46,10 @@ private:
         {"Front_Right", {150, 199}}};
 
     // Initialize the minimum distances for each sector
-    std::map<std::string, float> min_distances;
+    std::map<std::string, float> min_distances, max_distances;
     for (const auto &sector : sectors) {
       min_distances[sector.first] = std::numeric_limits<float>::infinity();
+      max_distances[sector.first] = std::numeric_limits<float>::infinity();
     }
 
     // Find the minimum distance in each sector
@@ -64,17 +65,11 @@ private:
 
         if (start_it < end_it) {
           min_distances[sector.first] = *std::min_element(start_it, end_it);
+          max_distances[sector.first] = *std::max_element(start_it, end_it);
         }
       }
     }
 
-    // Log the minimum distances
-    for (const auto &distance : min_distances) {
-      RCLCPP_INFO(this->get_logger(), "%s: %.2f meters", distance.first.c_str(),
-                  distance.second);
-    }
-
-    // TO DO: move obstacle detection to patrol algorithm
     // Define the threshold for obstacle detection
     float obstacle_threshold = 0.35f; // meters
 
@@ -86,11 +81,22 @@ private:
 
     if (detections["Front_Left"] || detections["Front_Right"]) {
       RCLCPP_INFO(this->get_logger(), "Obstacle ahead.");
+      obstacle_found = true;
+
+      // Determine the safest direction to turn
+      if (std::max(max_distances["Front_Right"], max_distances["Right"]) <
+          std::max(max_distances["Left"], max_distances["Front_Left"])) {
+        turn_dir = 0.5;
+        RCLCPP_INFO(this->get_logger(), "Safest distance is left.");
+      } else {
+        turn_dir = -0.5;
+        RCLCPP_INFO(this->get_logger(), "Safest distance is right.");
+      }
+
     } else {
+      obstacle_found = false;
     }
   }
-
-  // TO DO: patrol algorithm
 
   // TO DO: control callback loop
 };
