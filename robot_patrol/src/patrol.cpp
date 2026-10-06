@@ -1,6 +1,7 @@
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/laser_scan.hpp"
 #include "std_msgs/msg/string.hpp"
+#include <geometry_msgs/msg/twist.hpp>
 
 class Patrol : public rclcpp::Node {
 public:
@@ -13,6 +14,13 @@ public:
         "/fastbot_1/scan", qos,
         std::bind(&Patrol::laserscan_callback, this, std::placeholders::_1));
 
+    cmd_vel_publisher_ = this->create_publisher<geometry_msgs::msg::Twist>(
+        "/fastbot_1/cmd_vel", 10);
+
+    control_timer_ =
+        this->create_wall_timer(std::chrono::milliseconds(100),
+                                std::bind(&Patrol::control_callback, this));
+
     RCLCPP_INFO(this->get_logger(), "%s ready...", node_name_.c_str());
   }
 
@@ -24,6 +32,8 @@ private:
   std::string node_name_;
   rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr
       subscriber_laser_;
+  rclcpp::TimerBase::SharedPtr control_timer_;
+  rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_publisher_;
 
   // private variables
   const double distance_thres = 0.35;
@@ -84,21 +94,42 @@ private:
       obstacle_found = true;
 
       // Determine the safest direction to turn
-      if (std::max(max_distances["Front_Right"], max_distances["Right"]) <
-          std::max(max_distances["Left"], max_distances["Front_Left"])) {
+      if ((std::max(max_distances["Front_Right"], max_distances["Right"]) <
+           std::max(max_distances["Left"], max_distances["Front_Left"])) &&
+          std::max(max_distances["Left"], max_distances["Front_Left"]) >
+              distance_thres) {
         turn_dir = 0.5;
-        RCLCPP_INFO(this->get_logger(), "Safest distance is left.");
-      } else {
+        RCLCPP_INFO(this->get_logger(), "Safest direction is left.");
+      } else if (std::max(max_distances["Right"],
+                          max_distances["Front_Right"]) > distance_thres) {
         turn_dir = -0.5;
-        RCLCPP_INFO(this->get_logger(), "Safest distance is right.");
+        RCLCPP_INFO(this->get_logger(), "Safest direction is right.");
+      } else {
+        turn_dir = 0;
+        RCLCPP_INFO(this->get_logger(), "No safe direction.");
       }
-
     } else {
       obstacle_found = false;
     }
   }
 
-  // TO DO: control callback loop
+  void control_callback() {
+
+    auto vel_msg = geometry_msgs::msg::Twist();
+
+    if (!obstacle_found) {
+      vel_msg.linear.x = 0.1;
+      vel_msg.angular.z = 0.0;
+    } else if (turn_dir != 0) {
+      vel_msg.linear.x = 0.05;
+      vel_msg.angular.z = turn_dir;
+    } else {
+      // No safe diretion case
+      vel_msg.linear.x = 0.0;
+      vel_msg.angular.z = 0.0;
+    }
+    cmd_vel_publisher_->publish(vel_msg);
+  }
 };
 
 int main(int argc, char *argv[]) {
