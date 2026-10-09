@@ -21,6 +21,10 @@ public:
         this->create_wall_timer(std::chrono::milliseconds(100),
                                 std::bind(&Patrol::control_callback, this));
 
+    obstacle_found = false;
+    stop_flag = false;
+    turning = false;
+    safe_dir = 0.0;
     RCLCPP_INFO(this->get_logger(), "%s ready...", node_name_.c_str());
   }
 
@@ -36,9 +40,9 @@ private:
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_publisher_;
 
   // private variables
-  const double distance_thres = 0.35;
-  bool obstacle_found;
-  double turn_dir;
+  const double distance_thres = 0.35, stop_thres = 0.1;
+  bool obstacle_found, turning, stop_flag;
+  double safe_dir, turn_dir;
 
   // subscriptions callback functions
   void laserscan_callback(const sensor_msgs::msg::LaserScan::SharedPtr msg) {
@@ -80,36 +84,47 @@ private:
       }
     }
 
-    // Define the threshold for obstacle detection
-    float obstacle_threshold = 0.35f; // meters
-
     // Determine detected obstacles
     std::map<std::string, bool> detections;
     for (const auto &distance : min_distances) {
-      detections[distance.first] = distance.second < obstacle_threshold;
+      detections[distance.first] = distance.second < distance_thres;
     }
 
     if (detections["Front_Left"] || detections["Front_Right"]) {
-      RCLCPP_INFO(this->get_logger(), "Obstacle ahead.");
-      obstacle_found = true;
+      if (!obstacle_found) {
+        RCLCPP_INFO(this->get_logger(), "Obstacle ahead.");
+      }
+      if (std::min(min_distances["Front_Left"], min_distances["Front_Right"]) <
+          stop_thres) {
+        // Stop before running into an obstacle if too close
+        stop_flag = true;
+      } else {
+        stop_flag = false;
+      }
 
       // Determine the safest direction to turn
       if ((std::max(max_distances["Front_Right"], max_distances["Right"]) <
            std::max(max_distances["Left"], max_distances["Front_Left"])) &&
-          std::max(max_distances["Left"], max_distances["Front_Left"]) >
-              distance_thres) {
-        turn_dir = 0.5;
-        RCLCPP_INFO(this->get_logger(), "Safest direction is left.");
+          (std::max(max_distances["Left"], max_distances["Front_Left"]) >
+           distance_thres)) {
+        safe_dir = 0.5;
+        if (!obstacle_found)
+          RCLCPP_INFO(this->get_logger(), "Safest direction is left.");
       } else if (std::max(max_distances["Right"],
                           max_distances["Front_Right"]) > distance_thres) {
-        turn_dir = -0.5;
-        RCLCPP_INFO(this->get_logger(), "Safest direction is right.");
+        safe_dir = -0.5;
+        if (!obstacle_found)
+          RCLCPP_INFO(this->get_logger(), "Safest direction is right.");
       } else {
-        turn_dir = 0;
-        RCLCPP_INFO(this->get_logger(), "No safe direction.");
+        safe_dir = 0;
+        if (!obstacle_found)
+          RCLCPP_INFO(this->get_logger(), "No safe direction.");
       }
+      obstacle_found = true;
     } else {
       obstacle_found = false;
+      stop_flag = false;
+      safe_dir = 0;
     }
   }
 
@@ -117,16 +132,27 @@ private:
 
     auto vel_msg = geometry_msgs::msg::Twist();
 
-    if (!obstacle_found) {
+    // Change directin only if the robot is not already turning, avoids
+    // squiggling
+    if (safe_dir == 0) {
+      turning = false;
+      turn_dir = safe_dir;
+    } else if (!turning) {
+      turning = true;
+      turn_dir = safe_dir;
+    }
+    vel_msg.angular.z = turn_dir;
+
+    if (stop_flag) {
+      // If obstacles are too close, don't keep moving forward while turning
+      vel_msg.linear.x = 0.0;
+    } else if (!obstacle_found) {
       vel_msg.linear.x = 0.1;
-      vel_msg.angular.z = 0.0;
-    } else if (turn_dir != 0) {
+    } else if (safe_dir != 0) {
       vel_msg.linear.x = 0.05;
-      vel_msg.angular.z = turn_dir;
     } else {
       // No safe diretion case
       vel_msg.linear.x = 0.0;
-      vel_msg.angular.z = 0.0;
     }
     cmd_vel_publisher_->publish(vel_msg);
   }
