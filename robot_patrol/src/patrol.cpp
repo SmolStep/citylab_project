@@ -11,11 +11,11 @@ public:
     auto qos = rclcpp::QoS(10).reliability(rclcpp::ReliabilityPolicy::Reliable);
 
     subscriber_laser_ = this->create_subscription<sensor_msgs::msg::LaserScan>(
-        "/fastbot_1/scan", qos,
+        "/scan", qos,
         std::bind(&Patrol::laserscan_callback, this, std::placeholders::_1));
 
-    cmd_vel_publisher_ = this->create_publisher<geometry_msgs::msg::Twist>(
-        "/fastbot_1/cmd_vel", 10);
+    cmd_vel_publisher_ =
+        this->create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", 10);
 
     control_timer_ =
         this->create_wall_timer(std::chrono::milliseconds(100),
@@ -40,7 +40,9 @@ private:
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_publisher_;
 
   // private variables
-  const double distance_thres = 0.35, stop_thres = 0.1;
+  // Actual robot scans have an offset between the scanner and the robot
+  // surface, so the distances are increased to match that
+  const double distance_thres = 0.55, stop_thres = 0.3;
   bool obstacle_found, turning, stop_flag;
   double safe_dir, turn_dir;
 
@@ -48,16 +50,13 @@ private:
   void laserscan_callback(const sensor_msgs::msg::LaserScan::SharedPtr msg) {
 
     // Define the sectors with their index ranges
-    // Scan array has 200 values for 2pi range
+    // Scan array has 450 values for 2pi range
     // First value is front, moving counter-clockwise
-    // 50th value is left, 150th is right
-    // Front 180° corresponds to indexes [0 - 49] and [150 - 199]
-    // Using a range of -20°, +20° as front == indexes [0:10],[189:199]
     std::map<std::string, std::pair<int, int>> sectors = {
-        {"Front_Left", {0, 10}},
-        {"Left", {11, 49}},
-        {"Right", {150, 188}},
-        {"Front_Right", {150, 199}}};
+        {"Front_Left", {0, 24}}, //450*(0°:20°)/360°
+        {"Left", {25, 112}}, //450*(20°:90°)/360°
+        {"Right", {337, 424}},//450*(270°:340°)/360°
+        {"Front_Right", {425, 449}}}; //450*(340°:360°)/360°
 
     // Initialize the minimum distances for each sector
     std::map<std::string, float> min_distances, max_distances;
